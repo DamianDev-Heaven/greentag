@@ -6,9 +6,16 @@
 //
 
 import Foundation
+import Firebase
+import FirebaseFirestore
 
 class UserService {
-    private let networkManager = NetworkManager.shared
+    static let shared = UserService()
+    
+    private let firebaseManager = FirebaseManager.shared
+    private let authService = AuthService.shared
+    
+    private init() {}
     
     // MARK: - User Operations
     

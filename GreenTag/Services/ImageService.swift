@@ -7,45 +7,67 @@
 
 import SwiftUI
 import Foundation
+import Firebase
+import FirebaseStorage
 
-class ImageService {
-    private let networkManager = NetworkManager.shared
+class ImageService: ObservableObject {
+    static let shared = ImageService()
+    
+    private let firebaseManager = FirebaseManager.shared
+    private let storage = Storage.storage()
+    private let imageCache = NSCache<NSString, UIImage>()
+    
+    private init() {
+        setupCache()
+    }
+    
+    private func setupCache() {
+        imageCache.countLimit = 100
+        imageCache.totalCostLimit = 50 * 1024 * 1024 // 50MB
+    }
     
     // MARK: - Image Upload
     
-    func uploadImage(_ image: UIImage, compressionQuality: CGFloat = 0.8) async throws -> String {
+    func uploadImage(_ image: UIImage, path: String, compressionQuality: CGFloat = 0.8) async throws -> String {
         guard let imageData = image.jpegData(compressionQuality: compressionQuality) else {
             throw ImageError.compressionFailed
         }
         
-        return try await uploadImageData(imageData)
+        return try await uploadImageData(imageData, path: path)
     }
     
-    func uploadImageData(_ imageData: Data) async throws -> String {
-        try await Task.sleep(nanoseconds: 2_000_000_000) // Simulate upload time
-        
-        // Mock implementation - return a fake URL
-        let imageId = UUID().uuidString
-        return "https://example.com/images/\(imageId).jpg"
-        
-        // Actual API call:
-        // let response = try await networkManager.uploadImage(
-        //     imageData: imageData,
-        //     endpoint: "/images/upload"
-        // )
-        // let uploadResponse = try JSONDecoder().decode(ImageUploadResponse.self, from: response)
-        // return uploadResponse.imageURL
+    func uploadImageData(_ imageData: Data, path: String) async throws -> String {
+        do {
+            return try await firebaseManager.uploadImage(
+                data: imageData,
+                path: path,
+                contentType: "image/jpeg"
+            )
+        } catch {
+            throw ImageError.uploadFailed(error.localizedDescription)
+        }
     }
     
-    func uploadMultipleImages(_ images: [UIImage], compressionQuality: CGFloat = 0.8) async throws -> [String] {
+    func uploadMultipleImages(_ images: [UIImage], basePath: String, compressionQuality: CGFloat = 0.8) async throws -> [String] {
         var imageURLs: [String] = []
         
-        for image in images {
-            let url = try await uploadImage(image, compressionQuality: compressionQuality)
+        for (index, image) in images.enumerated() {
+            let imagePath = "\(basePath)/image_\(index)_\(UUID().uuidString).jpg"
+            let url = try await uploadImage(image, path: imagePath, compressionQuality: compressionQuality)
             imageURLs.append(url)
         }
         
         return imageURLs
+    }
+    
+    func uploadProfileImage(_ image: UIImage, userId: String, compressionQuality: CGFloat = 0.8) async throws -> String {
+        let path = FirebaseStoragePaths.userProfilePath(userId: userId) + "/profile.jpg"
+        return try await uploadImage(image, path: path, compressionQuality: compressionQuality)
+    }
+    
+    func uploadProductImages(_ images: [UIImage], productId: String, compressionQuality: CGFloat = 0.8) async throws -> [String] {
+        let basePath = FirebaseStoragePaths.productImagesPath(productId: productId)
+        return try await uploadMultipleImages(images, basePath: basePath, compressionQuality: compressionQuality)
     }
     
     // MARK: - Image Processing
@@ -82,36 +104,25 @@ class ImageService {
     
     // MARK: - Image Download and Caching
     
-    private var imageCache = NSCache<NSString, UIImage>()
-    
     func loadImage(from url: String) async throws -> UIImage {
         // Check if image is in cache
         if let cachedImage = imageCache.object(forKey: url as NSString) {
             return cachedImage
         }
         
-        // Simulate network download
-        try await Task.sleep(nanoseconds: 1_000_000_000)
-        
-        // In a real app, you would download from the URL
-        // guard let imageURL = URL(string: url) else {
-        //     throw ImageError.invalidURL
-        // }
-        // 
-        // let (data, _) = try await URLSession.shared.data(from: imageURL)
-        // guard let image = UIImage(data: data) else {
-        //     throw ImageError.invalidImageData
-        // }
-        
-        // For mock purposes, return a placeholder image
-        guard let placeholderImage = createPlaceholderImage() else {
-            throw ImageError.invalidImageData
+        do {
+            let imageData = try await firebaseManager.downloadImage(url: url)
+            guard let image = UIImage(data: imageData) else {
+                throw ImageError.invalidImageData
+            }
+            
+            // Cache the image
+            imageCache.setObject(image, forKey: url as NSString)
+            return image
+            
+        } catch {
+            throw ImageError.downloadFailed(error.localizedDescription)
         }
-        
-        // Cache the image
-        imageCache.setObject(placeholderImage, forKey: url as NSString)
-        
-        return placeholderImage
     }
     
     func preloadImages(urls: [String]) async {
@@ -126,6 +137,22 @@ class ImageService {
     
     func clearImageCache() {
         imageCache.removeAllObjects()
+    }
+    
+    // MARK: - Image Deletion
+    
+    func deleteImage(path: String) async throws {
+        do {
+            try await firebaseManager.deleteImage(path: path)
+        } catch {
+            throw ImageError.deletionFailed(error.localizedDescription)
+        }
+    }
+    
+    func deleteImages(paths: [String]) async throws {
+        for path in paths {
+            try await deleteImage(path: path)
+        }
     }
     
     // MARK: - Utility Methods
@@ -182,11 +209,13 @@ class ImageService {
     }
 }
 
-// MARK: - Image Errors
+// MARK: - Supporting Types
 
 enum ImageError: LocalizedError {
     case compressionFailed
-    case uploadFailed
+    case uploadFailed(String)
+    case downloadFailed(String)
+    case deletionFailed(String)
     case invalidURL
     case invalidImageData
     case fileSizeTooLarge
@@ -198,8 +227,12 @@ enum ImageError: LocalizedError {
         switch self {
         case .compressionFailed:
             return "Error al comprimir la imagen"
-        case .uploadFailed:
-            return "Error al subir la imagen"
+        case .uploadFailed(let message):
+            return "Error al subir la imagen: \(message)"
+        case .downloadFailed(let message):
+            return "Error al descargar la imagen: \(message)"
+        case .deletionFailed(let message):
+            return "Error al eliminar la imagen: \(message)"
         case .invalidURL:
             return "URL de imagen inválida"
         case .invalidImageData:
@@ -216,10 +249,11 @@ enum ImageError: LocalizedError {
     }
 }
 
-// MARK: - Image Upload Response
-
-struct ImageUploadResponse: Codable {
-    let imageURL: String
+struct ImageUploadResult {
+    let url: String
+    let path: String
+    let size: Int
+}
     let thumbnailURL: String?
     let width: Int
     let height: Int

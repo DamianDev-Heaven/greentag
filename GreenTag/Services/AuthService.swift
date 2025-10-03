@@ -6,164 +6,322 @@
 //
 
 import Foundation
+import Firebase
+import FirebaseAuth
+import FirebaseFirestore
 
 class AuthService {
-    private let networkManager = NetworkManager.shared
+    static let shared = AuthService()
+    
+    private let firebaseManager = FirebaseManager.shared
+    private let auth = Auth.auth()
+    private let userDefaults = UserDefaults.standard
+    
+    private init() {}
     
     // MARK: - Authentication Methods
     
-    func login(email: String, password: String) async throws -> User {
-        let parameters = [
-            "email": email,
-            "password": password
-        ]
-        
-        // For now, return mock data. Replace with actual API call
-        try await Task.sleep(nanoseconds: 1_000_000_000) // Simulate network delay
-        
-        // Mock authentication - replace with actual API integration
-        if email == "demo@greentag.com" && password == "demo123" {
-            return User(
-                firstName: "Usuario",
-                lastName: "Demo",
+    func signIn(email: String, password: String) async throws -> User {
+        do {
+            let authResult = try await auth.signIn(withEmail: email, password: password)
+            let user = try await getUserFromFirestore(uid: authResult.user.uid)
+            
+            // Store user ID locally
+            userDefaults.set(authResult.user.uid, forKey: "user_id")
+            
+            return user
+            
+        } catch let error as NSError {
+            throw mapAuthError(error)
+        }
+    }
+    
+    func signUp(name: String, email: String, password: String) async throws -> User {
+        do {
+            let authResult = try await auth.createUser(withEmail: email, password: password)
+            
+            // Create user profile in Firestore
+            let user = User(
+                id: authResult.user.uid,
+                name: name,
                 email: email,
-                phoneNumber: "+34 123 456 789",
-                country: "España",
-                city: "Madrid",
-                averageRating: 4.5,
-                totalReviews: 10,
-                ecoPoints: 1500,
-                isVerified: true
+                profileImageURL: nil,
+                bio: nil,
+                location: nil,
+                phone: nil,
+                points: 0,
+                level: .beginner,
+                joinDate: Date(),
+                averageRating: 0.0,
+                totalReviews: 0,
+                totalSales: 0,
+                totalPurchases: 0,
+                isVerified: false,
+                lastActiveDate: Date(),
+                favoriteCategories: [],
+                sustainabilityGoals: []
             )
+            
+            // Save to Firestore
+            try await firebaseManager.create(
+                collection: FirebaseCollections.users,
+                document: authResult.user.uid,
+                data: user
+            )
+            
+            // Update Firebase Auth profile
+            let changeRequest = authResult.user.createProfileChangeRequest()
+            changeRequest.displayName = name
+            try await changeRequest.commitChanges()
+            
+            // Store user ID locally
+            userDefaults.set(authResult.user.uid, forKey: "user_id")
+            
+            return user
+            
+        } catch let error as NSError {
+            throw mapAuthError(error)
+        }
+    }
+    
+    func signOut() throws {
+        do {
+            try auth.signOut()
+            userDefaults.removeObject(forKey: "user_id")
+        } catch {
+            throw AuthError.signOutFailed(error.localizedDescription)
+        }
+    }
+    
+    func getCurrentUser() async throws -> User? {
+        guard let currentUser = auth.currentUser else {
+            return nil
         }
         
-        // Simulate API call
-        // let response = try await networkManager.request(
-        //     endpoint: "/auth/login",
-        //     method: .POST,
-        //     parameters: parameters
-        // )
-        // return try JSONDecoder().decode(User.self, from: response)
-        
-        throw AuthError.invalidCredentials
-    }
-    
-    func register(
-        firstName: String,
-        lastName: String,
-        email: String,
-        phoneNumber: String,
-        country: String,
-        city: String,
-        password: String
-    ) async throws -> User {
-        let parameters = [
-            "firstName": firstName,
-            "lastName": lastName,
-            "email": email,
-            "phoneNumber": phoneNumber,
-            "country": country,
-            "city": city,
-            "password": password
-        ]
-        
-        // For now, return mock data. Replace with actual API call
-        try await Task.sleep(nanoseconds: 1_500_000_000) // Simulate network delay
-        
-        // Mock registration - replace with actual API integration
-        let newUser = User(
-            firstName: firstName,
-            lastName: lastName,
-            email: email,
-            phoneNumber: phoneNumber,
-            country: country,
-            city: city
-        )
-        
-        // Simulate API call
-        // let response = try await networkManager.request(
-        //     endpoint: "/auth/register",
-        //     method: .POST,
-        //     parameters: parameters
-        // )
-        // return try JSONDecoder().decode(User.self, from: response)
-        
-        return newUser
-    }
-    
-    func logout() async throws {
-        // Simulate API call to invalidate session
-        try await Task.sleep(nanoseconds: 500_000_000)
-        
-        // let _ = try await networkManager.request(
-        //     endpoint: "/auth/logout",
-        //     method: .POST
-        // )
-    }
-    
-    func refreshToken() async throws -> String {
-        // Simulate token refresh
-        try await Task.sleep(nanoseconds: 500_000_000)
-        
-        // let response = try await networkManager.request(
-        //     endpoint: "/auth/refresh",
-        //     method: .POST
-        // )
-        // let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: response)
-        // return tokenResponse.accessToken
-        
-        return "mock_refreshed_token"
+        do {
+            return try await getUserFromFirestore(uid: currentUser.uid)
+        } catch {
+            throw AuthError.userFetchFailed(error.localizedDescription)
+        }
     }
     
     func resetPassword(email: String) async throws {
-        let parameters = ["email": email]
-        
-        try await Task.sleep(nanoseconds: 1_000_000_000)
-        
-        // let _ = try await networkManager.request(
-        //     endpoint: "/auth/reset-password",
-        //     method: .POST,
-        //     parameters: parameters
-        // )
+        do {
+            try await auth.sendPasswordReset(withEmail: email)
+        } catch let error as NSError {
+            throw mapAuthError(error)
+        }
     }
     
-    func verifyEmail(code: String) async throws {
-        let parameters = ["code": code]
+    func updateProfile(user: User) async throws -> User {
+        guard let currentUser = auth.currentUser else {
+            throw AuthError.notAuthenticated
+        }
         
-        try await Task.sleep(nanoseconds: 1_000_000_000)
+        do {
+            // Update Firebase Auth profile if name changed
+            if currentUser.displayName != user.name {
+                let changeRequest = currentUser.createProfileChangeRequest()
+                changeRequest.displayName = user.name
+                try await changeRequest.commitChanges()
+            }
+            
+            // Update Firestore document
+            var updatedUser = user
+            updatedUser.lastActiveDate = Date()
+            
+            try await firebaseManager.update(
+                collection: FirebaseCollections.users,
+                document: currentUser.uid,
+                data: updatedUser
+            )
+            
+            return updatedUser
+            
+        } catch {
+            throw AuthError.profileUpdateFailed(error.localizedDescription)
+        }
+    }
+    
+    func changePassword(currentPassword: String, newPassword: String) async throws {
+        guard let currentUser = auth.currentUser else {
+            throw AuthError.notAuthenticated
+        }
         
-        // let _ = try await networkManager.request(
-        //     endpoint: "/auth/verify-email",
-        //     method: .POST,
-        //     parameters: parameters
-        // )
+        do {
+            // Re-authenticate user
+            let credential = EmailAuthProvider.credential(withEmail: currentUser.email ?? "", password: currentPassword)
+            try await currentUser.reauthenticate(with: credential)
+            
+            // Update password
+            try await currentUser.updatePassword(to: newPassword)
+            
+        } catch let error as NSError {
+            throw mapAuthError(error)
+        }
+    }
+    
+    func deleteAccount(password: String) async throws {
+        guard let currentUser = auth.currentUser else {
+            throw AuthError.notAuthenticated
+        }
+        
+        do {
+            // Re-authenticate user
+            let credential = EmailAuthProvider.credential(withEmail: currentUser.email ?? "", password: password)
+            try await currentUser.reauthenticate(with: credential)
+            
+            // Delete user data from Firestore
+            try await firebaseManager.delete(
+                collection: FirebaseCollections.users,
+                document: currentUser.uid
+            )
+            
+            // Delete user profile image if exists
+            try? await firebaseManager.deleteImage(
+                path: FirebaseStoragePaths.userProfilePath(userId: currentUser.uid)
+            )
+            
+            // Delete Firebase Auth account
+            try await currentUser.delete()
+            
+            // Clear local storage
+            userDefaults.removeObject(forKey: "user_id")
+            
+        } catch let error as NSError {
+            throw mapAuthError(error)
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    var isAuthenticated: Bool {
+        return auth.currentUser != nil
+    }
+    
+    var isEmailVerified: Bool {
+        return auth.currentUser?.isEmailVerified ?? false
+    }
+    
+    var currentUserUID: String? {
+        return auth.currentUser?.uid
+    }
+    
+    private func getUserFromFirestore(uid: String) async throws -> User {
+        return try await firebaseManager.read(
+            collection: FirebaseCollections.users,
+            document: uid,
+            type: User.self
+        )
+    }
+    
+    private func mapAuthError(_ error: NSError) -> AuthError {
+        guard let errorCode = AuthErrorCode.Code(rawValue: error.code) else {
+            return AuthError.unknown(error.localizedDescription)
+        }
+        
+        switch errorCode {
+        case .invalidEmail:
+            return .invalidEmail
+        case .userNotFound:
+            return .userNotFound
+        case .wrongPassword:
+            return .wrongPassword
+        case .emailAlreadyInUse:
+            return .emailAlreadyInUse
+        case .weakPassword:
+            return .weakPassword
+        case .networkError:
+            return .networkError
+        case .tooManyRequests:
+            return .tooManyRequests
+        case .userDisabled:
+            return .userDisabled
+        case .requiresRecentLogin:
+            return .requiresRecentLogin
+        default:
+            return .unknown(error.localizedDescription)
+        }
+    }
+    
+    // MARK: - Auth State Listener
+    
+    func addAuthStateListener(completion: @escaping (User?) -> Void) -> AuthStateDidChangeListenerHandle {
+        return auth.addStateDidChangeListener { [weak self] _, firebaseUser in
+            guard let self = self else { return }
+            
+            if let firebaseUser = firebaseUser {
+                Task {
+                    do {
+                        let user = try await self.getUserFromFirestore(uid: firebaseUser.uid)
+                        await MainActor.run {
+                            completion(user)
+                        }
+                    } catch {
+                        await MainActor.run {
+                            completion(nil)
+                        }
+                    }
+                }
+            } else {
+                completion(nil)
+            }
+        }
+    }
+    
+    func removeAuthStateListener(_ handle: AuthStateDidChangeListenerHandle) {
+        auth.removeStateDidChangeListener(handle)
     }
 }
 
-// MARK: - Auth Errors
+// MARK: - Supporting Types
 
 enum AuthError: LocalizedError {
-    case invalidCredentials
+    case invalidEmail
     case userNotFound
-    case emailAlreadyExists
+    case wrongPassword
+    case emailAlreadyInUse
     case weakPassword
     case networkError
-    case unknownError
+    case tooManyRequests
+    case userDisabled
+    case requiresRecentLogin
+    case notAuthenticated
+    case signOutFailed(String)
+    case userFetchFailed(String)
+    case profileUpdateFailed(String)
+    case unknown(String)
     
     var errorDescription: String? {
         switch self {
-        case .invalidCredentials:
-            return "Email o contraseña incorrectos"
+        case .invalidEmail:
+            return "El formato del email es inválido"
         case .userNotFound:
-            return "Usuario no encontrado"
-        case .emailAlreadyExists:
-            return "Este email ya está registrado"
+            return "No se encontró una cuenta con este email"
+        case .wrongPassword:
+            return "La contraseña es incorrecta"
+        case .emailAlreadyInUse:
+            return "Ya existe una cuenta con este email"
         case .weakPassword:
             return "La contraseña debe tener al menos 6 caracteres"
         case .networkError:
             return "Error de conexión. Verifica tu internet"
-        case .unknownError:
-            return "Ha ocurrido un error inesperado"
+        case .tooManyRequests:
+            return "Demasiados intentos. Intenta más tarde"
+        case .userDisabled:
+            return "Esta cuenta ha sido deshabilitada"
+        case .requiresRecentLogin:
+            return "Necesitas iniciar sesión nuevamente"
+        case .notAuthenticated:
+            return "No has iniciado sesión"
+        case .signOutFailed(let message):
+            return "Error al cerrar sesión: \(message)"
+        case .userFetchFailed(let message):
+            return "Error al obtener usuario: \(message)"
+        case .profileUpdateFailed(let message):
+            return "Error al actualizar perfil: \(message)"
+        case .unknown(let message):
+            return "Error desconocido: \(message)"
         }
     }
 }
