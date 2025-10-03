@@ -10,15 +10,20 @@ import Foundation
 struct Review: Identifiable, Codable, Hashable {
     let id: String
     let reviewerId: String
-    let reviewerName: String
-    let reviewerImageURL: String?
     let reviewedUserId: String
     let productId: String?
     let rating: Int
     let comment: String
     let createdAt: Date
+    let updatedAt: Date
     let isVerified: Bool
     
+    // Relational properties (loaded separately)
+    var reviewer: User?
+    var reviewedUser: User?
+    var product: Product?
+    
+    // MARK: - Computed Properties
     var timeAgoString: String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -29,28 +34,53 @@ struct Review: Identifiable, Codable, Hashable {
         String(repeating: "★", count: rating) + String(repeating: "☆", count: 5 - rating)
     }
     
+    var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: createdAt)
+    }
+    
+    // MARK: - CodingKeys for Supabase snake_case conversion
+    enum CodingKeys: String, CodingKey {
+        case id
+        case reviewerId = "reviewer_id"
+        case reviewedUserId = "reviewed_user_id"
+        case productId = "product_id"
+        case rating
+        case comment
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case isVerified = "is_verified"
+    }
+    
+    // MARK: - Initializers
     init(
         id: String = UUID().uuidString,
         reviewerId: String,
-        reviewerName: String,
-        reviewerImageURL: String? = nil,
         reviewedUserId: String,
         productId: String? = nil,
         rating: Int,
         comment: String,
         createdAt: Date = Date(),
-        isVerified: Bool = false
+        updatedAt: Date = Date(),
+        isVerified: Bool = false,
+        reviewer: User? = nil,
+        reviewedUser: User? = nil,
+        product: Product? = nil
     ) {
         self.id = id
         self.reviewerId = reviewerId
-        self.reviewerName = reviewerName
-        self.reviewerImageURL = reviewerImageURL
         self.reviewedUserId = reviewedUserId
         self.productId = productId
         self.rating = max(1, min(5, rating)) // Ensure rating is between 1-5
         self.comment = comment
         self.createdAt = createdAt
+        self.updatedAt = updatedAt
         self.isVerified = isVerified
+        self.reviewer = reviewer
+        self.reviewedUser = reviewedUser
+        self.product = product
     }
 }
 

@@ -12,21 +12,23 @@ struct Product: Identifiable, Codable, Hashable {
     let title: String
     let description: String
     let category: ProductCategory
-    let imageURLs: [String]
     let sellerId: String
-    let sellerName: String
-    let sellerRating: Double
-    let location: Location
     let price: Double?
     let isDonation: Bool
     let isAvailable: Bool
     let condition: ProductCondition
+    let location: String?
     let createdAt: Date
     let updatedAt: Date
-    let tags: [String]
+    let tags: [String]?
     let viewCount: Int
     let favoriteCount: Int
     
+    // Relational properties (loaded separately)
+    var images: [ProductImage]?
+    var seller: User?
+    
+    // MARK: - Computed Properties
     var formattedPrice: String {
         if isDonation {
             return "Gratis"
@@ -38,7 +40,7 @@ struct Product: Identifiable, Codable, Hashable {
     }
     
     var primaryImageURL: String? {
-        imageURLs.first
+        images?.first?.imageURL
     }
     
     var timeAgoString: String {
@@ -47,44 +49,103 @@ struct Product: Identifiable, Codable, Hashable {
         return formatter.localizedString(for: createdAt, relativeTo: Date())
     }
     
+    var categoryDisplayName: String {
+        category.displayName
+    }
+    
+    var conditionDisplayName: String {
+        condition.displayName
+    }
+    
+    // MARK: - CodingKeys for Supabase snake_case conversion
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case description
+        case category
+        case sellerId = "seller_id"
+        case price
+        case isDonation = "is_donation"
+        case isAvailable = "is_available"
+        case condition
+        case location
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case tags
+        case viewCount = "view_count"
+        case favoriteCount = "favorite_count"
+    }
+    
+    
+    // MARK: - Initializers
     init(
         id: String = UUID().uuidString,
         title: String,
         description: String,
         category: ProductCategory,
-        imageURLs: [String],
         sellerId: String,
-        sellerName: String,
-        sellerRating: Double,
-        location: Location,
         price: Double? = nil,
         isDonation: Bool = false,
         isAvailable: Bool = true,
         condition: ProductCondition = .good,
+        location: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        tags: [String] = [],
+        tags: [String]? = nil,
         viewCount: Int = 0,
-        favoriteCount: Int = 0
+        favoriteCount: Int = 0,
+        images: [ProductImage]? = nil,
+        seller: User? = nil
     ) {
         self.id = id
         self.title = title
         self.description = description
         self.category = category
-        self.imageURLs = imageURLs
         self.sellerId = sellerId
-        self.sellerName = sellerName
-        self.sellerRating = sellerRating
-        self.location = location
         self.price = price
         self.isDonation = isDonation
         self.isAvailable = isAvailable
         self.condition = condition
+        self.location = location
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.tags = tags
         self.viewCount = viewCount
         self.favoriteCount = favoriteCount
+        self.images = images
+        self.seller = seller
+    }
+}
+
+// MARK: - ProductImage Model
+struct ProductImage: Identifiable, Codable, Hashable {
+    let id: String
+    let productId: String
+    let imageURL: String
+    let displayOrder: Int
+    let createdAt: Date
+    
+    // MARK: - CodingKeys for Supabase snake_case conversion
+    enum CodingKeys: String, CodingKey {
+        case id
+        case productId = "product_id"
+        case imageURL = "image_url"
+        case displayOrder = "display_order"
+        case createdAt = "created_at"
+    }
+    
+    init(
+        id: String = UUID().uuidString,
+        productId: String,
+        imageURL: String,
+        displayOrder: Int,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.productId = productId
+        self.imageURL = imageURL
+        self.displayOrder = displayOrder
+        self.createdAt = createdAt
     }
 }
 

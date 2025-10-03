@@ -10,17 +10,12 @@ import Foundation
 struct Shipment: Identifiable, Codable, Hashable {
     let id: String
     let productId: String
-    let productTitle: String
-    let productImageURL: String?
     let sellerId: String
-    let sellerName: String
     let buyerId: String
-    let buyerName: String
     let status: ShipmentStatus
     let trackingNumber: String?
-    let shippingMethod: ShippingMethod
-    let fromAddress: Address
-    let toAddress: Address
+    let fromAddress: String
+    let toAddress: String
     let estimatedDelivery: Date?
     let actualDelivery: Date?
     let shippingCost: Double
@@ -28,12 +23,22 @@ struct Shipment: Identifiable, Codable, Hashable {
     let updatedAt: Date
     let notes: String?
     
+    // Relational properties (loaded separately)
+    var product: Product?
+    var seller: User?
+    var buyer: User?
+    
+    // MARK: - Computed Properties
     var statusColor: String {
         status.color
     }
     
     var statusIcon: String {
-        status.icon
+        status.iconName
+    }
+    
+    var statusDisplayName: String {
+        status.displayName
     }
     
     var formattedShippingCost: String {
@@ -51,38 +56,63 @@ struct Shipment: Identifiable, Codable, Hashable {
         return formatter.string(from: estimatedDelivery)
     }
     
+    var actualDeliveryString: String? {
+        guard let actualDelivery = actualDelivery else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter.string(from: actualDelivery)
+    }
+    
+    var timeAgoString: String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: createdAt, relativeTo: Date())
+    }
+    
+    // MARK: - CodingKeys for Supabase snake_case conversion
+    enum CodingKeys: String, CodingKey {
+        case id
+        case productId = "product_id"
+        case sellerId = "seller_id"
+        case buyerId = "buyer_id"
+        case status
+        case trackingNumber = "tracking_number"
+        case fromAddress = "from_address"
+        case toAddress = "to_address"
+        case estimatedDelivery = "estimated_delivery"
+        case actualDelivery = "actual_delivery"
+        case shippingCost = "shipping_cost"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case notes
+    }
+    
+    // MARK: - Initializers
     init(
         id: String = UUID().uuidString,
         productId: String,
-        productTitle: String,
-        productImageURL: String? = nil,
         sellerId: String,
-        sellerName: String,
         buyerId: String,
-        buyerName: String,
         status: ShipmentStatus = .pending,
         trackingNumber: String? = nil,
-        shippingMethod: ShippingMethod,
-        fromAddress: Address,
-        toAddress: Address,
+        fromAddress: String,
+        toAddress: String,
         estimatedDelivery: Date? = nil,
         actualDelivery: Date? = nil,
         shippingCost: Double = 0.0,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        notes: String? = nil
+        notes: String? = nil,
+        product: Product? = nil,
+        seller: User? = nil,
+        buyer: User? = nil
     ) {
         self.id = id
         self.productId = productId
-        self.productTitle = productTitle
-        self.productImageURL = productImageURL
         self.sellerId = sellerId
-        self.sellerName = sellerName
         self.buyerId = buyerId
-        self.buyerName = buyerName
         self.status = status
         self.trackingNumber = trackingNumber
-        self.shippingMethod = shippingMethod
         self.fromAddress = fromAddress
         self.toAddress = toAddress
         self.estimatedDelivery = estimatedDelivery
@@ -91,6 +121,9 @@ struct Shipment: Identifiable, Codable, Hashable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.notes = notes
+        self.product = product
+        self.seller = seller
+        self.buyer = buyer
     }
 }
 

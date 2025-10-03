@@ -6,95 +6,159 @@
 //
 
 import Foundation
-import Firebase
-import FirebaseAuth
-import FirebaseFirestore
+import Supabase
 
-class AuthService {
+@MainActor
+class AuthService: ObservableObject {
     static let shared = AuthService()
     
-    private let firebaseManager = FirebaseManager.shared
-    private let auth = Auth.auth()
+    private let supabaseManager = SupabaseManager.shared
     private let userDefaults = UserDefaults.standard
     
-    private init() {}
+    @Published var currentUser: User?
+    @Published var isAuthenticated = false
+    @Published var isLoading = false
+    
+    private init() {
+        Task {
+            await checkAuthenticationStatus()
+        }
+    }
+    
+    // MARK: - Authentication Status
+    
+    func checkAuthenticationStatus() async {
+        isLoading = true
+        
+        do {
+            if let session = supabaseManager.client.auth.session {
+                let user = try await getUserProfile(userId: session.user.id.uuidString)
+                await MainActor.run {
+                    self.currentUser = user
+                    self.isAuthenticated = true
+                }
+            } else {
+                await MainActor.run {
+                    self.currentUser = nil
+                    self.isAuthenticated = false
+                }
+            }
+        } catch {
+            print("Error checking auth status: \(error)")
+            await MainActor.run {
+                self.currentUser = nil
+                self.isAuthenticated = false
+            }
+        }
+        
+        await MainActor.run {
+            self.isLoading = false
+        }
+    }
     
     // MARK: - Authentication Methods
     
     func signIn(email: String, password: String) async throws -> User {
+        isLoading = true
+        defer { Task { @MainActor in self.isLoading = false } }
+        
         do {
-            let authResult = try await auth.signIn(withEmail: email, password: password)
-            let user = try await getUserFromFirestore(uid: authResult.user.uid)
-            
-            // Store user ID locally
-            userDefaults.set(authResult.user.uid, forKey: "user_id")
-            
-            return user
-            
-        } catch let error as NSError {
-            throw mapAuthError(error)
-        }
-    }
-    
-    func signUp(name: String, email: String, password: String) async throws -> User {
-        do {
-            let authResult = try await auth.createUser(withEmail: email, password: password)
-            
-            // Create user profile in Firestore
-            let user = User(
-                id: authResult.user.uid,
-                name: name,
+            let session = try await supabaseManager.client.auth.signIn(
                 email: email,
-                profileImageURL: nil,
-                bio: nil,
-                location: nil,
-                phone: nil,
-                points: 0,
-                level: .beginner,
-                joinDate: Date(),
-                averageRating: 0.0,
-                totalReviews: 0,
-                totalSales: 0,
-                totalPurchases: 0,
-                isVerified: false,
-                lastActiveDate: Date(),
-                favoriteCategories: [],
-                sustainabilityGoals: []
+                password: password
             )
             
-            // Save to Firestore
-            try await firebaseManager.create(
-                collection: FirebaseCollections.users,
-                document: authResult.user.uid,
-                data: user
-            )
+            let user = try await getUserProfile(userId: session.user.id.uuidString)
             
-            // Update Firebase Auth profile
-            let changeRequest = authResult.user.createProfileChangeRequest()
-            changeRequest.displayName = name
-            try await changeRequest.commitChanges()
+            await MainActor.run {
+                self.currentUser = user
+                self.isAuthenticated = true
+            }
             
             // Store user ID locally
-            userDefaults.set(authResult.user.uid, forKey: "user_id")
+            userDefaults.set(session.user.id.uuidString, forKey: "user_id")
             
             return user
             
-        } catch let error as NSError {
-            throw mapAuthError(error)
+        } catch {
+            throw AppError.authentication(error.localizedDescription)
         }
     }
     
-    func signOut() throws {
+    func signUp(firstName: String, lastName: String, email: String, password: String) async throws -> User {
+        isLoading = true
+        defer { Task { @MainActor in self.isLoading = false } }
+        
         do {
-            try auth.signOut()
-            userDefaults.removeObject(forKey: "user_id")
+            let session = try await supabaseManager.client.auth.signUp(
+                email: email,
+                password: password
+            )
+            
+            // Create user profile in Supabase
+            let user = User(
+                id: session.user.id.uuidString,
+                firstName: firstName,
+                lastName: lastName,
+                email: email
+            )
+            
+            // Save to Supabase profiles table
+            try await createUserProfile(user: user)
+            
+            await MainActor.run {
+                self.currentUser = user
+                self.isAuthenticated = true
+            }
+            
+            // Store user ID locally
+            userDefaults.set(session.user.id.uuidString, forKey: "user_id")
+            
+            return user
+            
         } catch {
-            throw AuthError.signOutFailed(error.localizedDescription)
+            throw AppError.authentication(error.localizedDescription)
+        }
+    }
+    
+    func signOut() async throws {
+        isLoading = true
+        defer { Task { @MainActor in self.isLoading = false } }
+        
+        do {
+            try await supabaseManager.client.auth.signOut()
+            
+            await MainActor.run {
+                self.currentUser = nil
+                self.isAuthenticated = false
+            }
+            
+            userDefaults.removeObject(forKey: "user_id")
+            
+        } catch {
+            throw AppError.authentication("Error al cerrar sesión: \(error.localizedDescription)")
+        }
+    }
+    
+    func resetPassword(email: String) async throws {
+        do {
+            try await supabaseManager.client.auth.resetPasswordForEmail(email)
+        } catch {
+            throw AppError.authentication("Error al enviar email de recuperación: \(error.localizedDescription)")
+        }
+    }
+    
+    func updatePassword(newPassword: String) async throws {
+        do {
+            let user = try await supabaseManager.client.auth.update(
+                user: UserAttributes(password: newPassword)
+            )
+        } catch {
+            throw AppError.authentication("Error al actualizar contraseña: \(error.localizedDescription)")
         }
     }
     
     func getCurrentUser() async throws -> User? {
-        guard let currentUser = auth.currentUser else {
             return nil
         }
         
