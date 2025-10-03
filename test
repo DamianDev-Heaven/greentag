@@ -9,8 +9,8 @@ class SupabaseManager {
     
     private init() {
         client = SupabaseClient(
-            supabaseURL: URL(string: "YOUR_SUPABASE_URL")!,
-            supabaseKey: "YOUR_SUPABASE_ANON_KEY"
+            supabaseURL: URL(string: "https://twhqxwpkuhawzsgqamqz.supabase.co")!,
+            supabaseKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR3aHF4d3BrdWhhd3pzZ3FhbXF6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTUyNDMzMiwiZXhwIjoyMDc1MTAwMzMyfQ.pn1oSN1d0w7MA05lsjF1U1e-KRTXXn9wsmogzwNSh2M"
         )
     }
 }
